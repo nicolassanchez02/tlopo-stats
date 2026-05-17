@@ -11,6 +11,7 @@ PeriodicReport::PeriodicReport(const std::string& name,
 
 PeriodicReport::~PeriodicReport()
 {
+    m_timer.cancel();
 }
 
 void PeriodicReport::start()
