@@ -3,13 +3,21 @@
 #include "collector/statCollectorManager.h"
 
 #include <boost/bind.hpp>
+#include <boost/version.hpp>
 
 #include <jansson.h>
 
 #include <iostream>
 
+// Boost moved socket->get_io_service() out and onto the executor API in
+// 1.70. Pick the constructor that matches the local Boost so this PR
+// compiles on CI's Alpine 3.8 (Boost 1.66) and on modern distros alike.
 RPCConnection::RPCConnection(tcp::socket* socket) : m_socket(socket), m_buffer(SOCK_BUFFER_SIZE),
+#if BOOST_VERSION >= 107000
+    m_timeout(socket->get_executor())
+#else
     m_timeout(socket->get_io_service())
+#endif
 {
     // Idle clients that connect and never send anything used to hold the
     // socket open indefinitely. Bound the wait so a single peer can't tie up
