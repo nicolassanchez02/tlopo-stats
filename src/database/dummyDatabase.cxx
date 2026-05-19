@@ -69,12 +69,14 @@ class DummyDatabase : public Database {
 
         virtual void set_highscore_entry(const std::string& collection,
                                          doid_t key,
-                                         long value)
+                                         long value,
+                                         bool reversed)
         {
             std::cout << "DummyDatabase::set_highscore_entry" << std::endl;
             std::cout << "    collection: " << collection << std::endl;
             std::cout << "    key: " << key << std::endl;
             std::cout << "    value: " << value << std::endl;
+            std::cout << "    reversed: " << reversed << std::endl;
         }
 };
 

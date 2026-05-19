@@ -242,13 +242,30 @@ class RedisDatabase : public Database {
 
         virtual void set_highscore_entry(const std::string& collection,
                                          doid_t key,
-                                         long value)
+                                         long value,
+                                         bool reversed)
         {
+            // Atomic compare-and-set: only writes if the new value beats the
+            // current one (higher for normal, lower for reversed). Without this,
+            // two concurrent updates can read the same current value and the
+            // later write overwrites the better one.
+            static const std::string script =
+                "local cur = redis.call('ZSCORE', KEYS[1], ARGV[1])\n"
+                "local val = tonumber(ARGV[2])\n"
+                "if cur == false or (ARGV[3] == '1' and val < tonumber(cur)) "
+                "or (ARGV[3] == '0' and val > tonumber(cur)) then\n"
+                "    redis.call('ZADD', KEYS[1], val, ARGV[1])\n"
+                "end\n"
+                "return 1\n";
+
             dlog << "set_highscore_entry";
-            std::vector<std::string> cmd = {"ZADD",
+            std::vector<std::string> cmd = {"EVAL",
+                                            script,
+                                            "1",
                                             m_prefix + ":avatar:" + collection,
+                                            std::to_string(key),
                                             std::to_string(value),
-                                            std::to_string(key)};
+                                            reversed ? "1" : "0"};
             set_highscore_entry(cmd);
         }
 

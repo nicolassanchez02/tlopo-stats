@@ -40,7 +40,8 @@ class Database {
                                             std::unordered_map<doid_t, long>& entries) = 0;
         virtual void set_highscore_entry(const std::string& collection,
                                          doid_t key,
-                                         long value) = 0;
+                                         long value,
+                                         bool reversed) = 0;
 };
 
 Database* get_dummy_db();

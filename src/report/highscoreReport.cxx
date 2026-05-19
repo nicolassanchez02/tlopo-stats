@@ -25,5 +25,5 @@ void HighscoreReport::set(doid_t key, long value)
     }
 
     m_entries[key] = value;
-    m_db->set_highscore_entry(m_name, key, value);
+    m_db->set_highscore_entry(m_name, key, value, m_reversed);
 }
