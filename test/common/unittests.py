@@ -1,4 +1,4 @@
-from tlopostats import Daemon
+from common.tlopostats import Daemon
 
 import unittest
 import datetime
@@ -129,7 +129,7 @@ class StatsTest(unittest.TestCase):
     def sendEvent(self, event, doIds=[], value=0):
         data = json.dumps({'event': event, 'doIds': doIds, 'value': value})
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) # UDP
-        sock.sendto(data, ('127.0.0.1', 8963))
+        sock.sendto(data.encode(), ('127.0.0.1', 8963))
         if event.startswith('AV_'):
             time.sleep(0.1)
 
@@ -141,5 +141,5 @@ class StatsTest(unittest.TestCase):
         data = json.dumps(kwargs)
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.connect(('127.0.0.1', 8964))
-        sock.send(data + '\n')
+        sock.send((data + '\n').encode())
         return json.loads(sock.recv(1024))

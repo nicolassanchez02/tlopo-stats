@@ -374,6 +374,14 @@ class RedisDatabase : public Database {
         int m_backoff_seconds = 1;
 };
 
+// Out-of-class definitions required for ODR-used static constexpr members
+// when compiling under C++14 (Alpine 3.8's gcc 6 default). Harmless and
+// redundant under C++17, which makes static constexpr members implicitly
+// inline. Without these the linker fails with undefined references when
+// attempt_reconnect takes the address of MAX_BACKOFF_SECONDS via std::min.
+constexpr int RedisDatabase::MAX_PENDING;
+constexpr int RedisDatabase::MAX_BACKOFF_SECONDS;
+
 Database* get_redis_db(const std::string& addr, int port,
                        const std::string& prefix)
 {

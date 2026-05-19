@@ -18,7 +18,8 @@ RUN apk update && apk add \
   jansson-dev \
   libev-dev \
   openssh-client \
-  perl
+  perl \
+  redis
 
 RUN rm /usr/bin/g++ && rm /usr/bin/gcc && ln -s $(which clang++) /usr/bin/g++ && ln -s $(which clang++) /usr/bin/gcc
 
