@@ -186,6 +186,9 @@ class RedisDatabase : public Database {
                                long value)
         {
             dlog << "add_entry";
+            if (drop_if_queue_full("add_entry"))
+                return;
+
             json_t* item = json_object();
             json_object_set_new(item, "name", json_string(name.c_str()));
             json_object_set_new(item, "type", json_string(type.c_str()));
@@ -199,7 +202,8 @@ class RedisDatabase : public Database {
             json_object_set_new(item, "time", json_string(timestamp));
 
             char* data = json_dumps(item, 0);
-            add_entry(data);
+            m_pending++;
+            do_add_entry(data);
             json_decref(item);
         }
 
@@ -207,11 +211,15 @@ class RedisDatabase : public Database {
                                             doid_t key,
                                             long value)
         {
+            if (drop_if_queue_full("add_incremental_report"))
+                return;
+
             std::vector<std::string> cmd = {"ZINCRBY",
                                             m_prefix + ":" + collection,
                                             std::to_string(value),
                                             std::to_string(key)};
-            add_incremental_report(cmd);
+            m_pending++;
+            do_add_incremental_report(cmd);
         }
 
         virtual void load_highscore_entries(const std::string& collection,
@@ -245,74 +253,107 @@ class RedisDatabase : public Database {
                                          long value)
         {
             dlog << "set_highscore_entry";
+            if (drop_if_queue_full("set_highscore_entry"))
+                return;
+
             std::vector<std::string> cmd = {"ZADD",
                                             m_prefix + ":avatar:" + collection,
                                             std::to_string(value),
                                             std::to_string(key)};
-            set_highscore_entry(cmd);
+            m_pending++;
+            do_set_highscore_entry(cmd);
         }
 
     private:
-        void add_entry(char* data)
+        // Bounded pending-command queue. When Redis is unreachable, in-flight
+        // command closures pile up because each failure retries itself. To
+        // avoid unbounded memory growth during a long outage, refuse new
+        // events once the count exceeds this cap.
+        static constexpr int MAX_PENDING = 10000;
+
+        // Exponential backoff cap (seconds) between reconnection attempts.
+        static constexpr int MAX_BACKOFF_SECONDS = 60;
+
+        bool drop_if_queue_full(const char* op)
         {
-            dlog << "add_entry";
+            if (m_pending < MAX_PENDING)
+                return false;
+
+            std::cerr << "redis: pending queue full (" << m_pending
+                      << "), dropping " << op << std::endl;
+            return true;
+        }
+
+        void do_add_entry(char* data)
+        {
             rdx.command<int>({"RPUSH", m_prefix + ":events", data}, [this, data](Command<int>& c) {
                 if (c.ok())
                 {
+                    m_pending--;
                     free(data);
                     return;
                 }
 
                 dlog << "add_entry failed";
-                attempt_reconnect_or_abort();
-                add_entry(data);
+                attempt_reconnect();
+                do_add_entry(data);
             });
         }
 
-        void add_incremental_report(const std::vector<std::string>& cmd)
+        void do_add_incremental_report(const std::vector<std::string>& cmd)
         {
-            dlog << "add_incremental_report";
             rdx.command<std::string>(cmd, [this, cmd](Command<std::string>& c) {
-                if (!c.ok())
+                if (c.ok())
                 {
-                    dlog << "add_incremental_report failed";
-                    attempt_reconnect_or_abort();
-                    add_incremental_report(cmd);
-                }
-            });
-        }
-
-        void set_highscore_entry(const std::vector<std::string>& cmd)
-        {
-            dlog << "set_highscore_entry";
-            rdx.command<long long int>(cmd, [this, cmd](Command<long long int>& c) {
-                if (!c.ok())
-                {
-                    dlog << "set_highscore_entry failed";
-                    attempt_reconnect_or_abort();
-                    set_highscore_entry(cmd);
-                }
-            });
-        }
-
-        void attempt_reconnect_or_abort(int max_attempts = 3)
-        {
-            dlog << "attempt_reconnect_or_abort";
-            for (int i = 1; i <= max_attempts; i++)
-            {
-                std::cerr << "attempting reconnection " << i << "/" << max_attempts << std::endl;
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-                if (rdx.connect(m_addr, m_port))
-                {
-                    dlog << "reconnected";
-                    std::cerr << "reconnected" << std::endl;
+                    m_pending--;
                     return;
                 }
+
+                dlog << "add_incremental_report failed";
+                attempt_reconnect();
+                do_add_incremental_report(cmd);
+            });
+        }
+
+        void do_set_highscore_entry(const std::vector<std::string>& cmd)
+        {
+            rdx.command<long long int>(cmd, [this, cmd](Command<long long int>& c) {
+                if (c.ok())
+                {
+                    m_pending--;
+                    return;
+                }
+
+                dlog << "set_highscore_entry failed";
+                attempt_reconnect();
+                do_set_highscore_entry(cmd);
+            });
+        }
+
+        void attempt_reconnect()
+        {
+            // Single sleep+connect attempt. The io_service is single-threaded
+            // (see main.cxx), so this synchronous sleep also serialises the
+            // retry rate for any other failed commands waiting behind us.
+            dlog << "attempt_reconnect";
+            std::cerr << "attempting reconnection (backoff "
+                      << m_backoff_seconds << "s, " << m_pending
+                      << " pending)" << std::endl;
+            std::this_thread::sleep_for(std::chrono::seconds(m_backoff_seconds));
+
+            if (rdx.connect(m_addr, m_port))
+            {
+                dlog << "reconnected";
+                std::cerr << "reconnected" << std::endl;
+                m_backoff_seconds = 1;
+                return;
             }
 
-            dlog << "unable to reconnect to Redis server, giving up";
-            std::cerr << "unable to reconnect to Redis server, giving up" << std::endl;
-            exit(1);
+            if (m_backoff_seconds < MAX_BACKOFF_SECONDS)
+            {
+                m_backoff_seconds = std::min(m_backoff_seconds * 2,
+                                             MAX_BACKOFF_SECONDS);
+            }
         }
 
         void connect_or_abort()
@@ -329,6 +370,8 @@ class RedisDatabase : public Database {
         std::string m_addr;
         int m_port;
         std::string m_prefix;
+        int m_pending = 0;
+        int m_backoff_seconds = 1;
 };
 
 Database* get_redis_db(const std::string& addr, int port,
