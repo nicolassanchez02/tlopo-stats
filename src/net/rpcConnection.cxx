@@ -8,16 +8,35 @@
 
 #include <iostream>
 
-RPCConnection::RPCConnection(tcp::socket* socket) : m_socket(socket), m_buffer(SOCK_BUFFER_SIZE)
+RPCConnection::RPCConnection(tcp::socket* socket) : m_socket(socket), m_buffer(SOCK_BUFFER_SIZE),
+    m_timeout(socket->get_io_service())
 {
+    // Idle clients that connect and never send anything used to hold the
+    // socket open indefinitely. Bound the wait so a single peer can't tie up
+    // a connection slot forever.
+    m_timeout.expires_from_now(boost::posix_time::seconds(RPC_READ_TIMEOUT_SECONDS));
+    m_timeout.async_wait(boost::bind(&RPCConnection::handle_timeout, this,
+                                     boost::asio::placeholders::error));
+
     async_read_until(*m_socket, m_buffer,
                      '\n', boost::bind(&RPCConnection::handle_read, this,
                                       boost::asio::placeholders::error,
                                       boost::asio::placeholders::bytes_transferred));
 }
 
+void RPCConnection::handle_timeout(const boost::system::error_code& ec)
+{
+    if (ec == boost::asio::error::operation_aborted)
+        return; // Cancelled by a successful read; no-op.
+
+    boost::system::error_code ignored;
+    m_socket->close(ignored);
+}
+
 void RPCConnection::handle_read(const boost::system::error_code& ec, size_t bytes)
 {
+    m_timeout.cancel();
+
     if (ec.value() != 0)
     {
         finish();
