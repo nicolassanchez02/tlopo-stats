@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include "rpcServer.h"
 #include "net/globals.h"
 
@@ -15,4 +17,5 @@ class RPCConnection final
 
         tcp::socket* m_socket;
         boost::asio::streambuf m_buffer;
+        std::string m_response;
 };

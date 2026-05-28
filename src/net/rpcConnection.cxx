@@ -216,11 +216,12 @@ void RPCConnection::handle_read(const boost::system::error_code& ec, size_t byte
     }
 
     char* dump = json_dumps(resp, 0);
-    async_write(*m_socket, boost::asio::buffer(dump, strlen(dump)),
+    m_response.assign(dump);
+    free(dump);
+    async_write(*m_socket, boost::asio::buffer(m_response),
                 boost::bind(&RPCConnection::handle_write, this,
                             boost::asio::placeholders::error,
                             boost::asio::placeholders::bytes_transferred));
-    free(dump);
 
     // Cleanup:
     json_decref(resp);
