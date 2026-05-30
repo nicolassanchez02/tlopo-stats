@@ -188,29 +188,14 @@ class RedisDatabase : public Database {
             m_pending++;
             issue({"RPUSH", m_prefix + ":banned", std::to_string(id)});
 
-            // Remove id from all leaderboards
-            auto callback = [id](Command<std::unordered_set<std::string>>& c)
-            {
-                if (!c.ok())
-                    return;
-
-                dlog << "add_to_ban_list callback";
-                for (auto key : c.reply())
-                    g_rdx->command<int>({"ZREM", key, std::to_string(id)});
-            };
-
-            try
-            {
-                g_rdx->command<std::unordered_set<std::string>>({"KEYS", m_prefix + ":avatar:*"},
-                                                                callback);
-                g_rdx->command<std::unordered_set<std::string>>({"KEYS", m_prefix + ":guild:*"},
-                                                                callback);
-            }
-            catch (const std::exception& e)
-            {
-                dlog << "add_to_ban_list threw, redis dropped";
-                m_connected = false;
-            }
+            // Remove id from all leaderboards. Resolve the keys synchronously on
+            // this (main) thread and queue each ZREM through the guarded issue()
+            // path, rather than issuing from a redox command callback. The
+            // callback runs on redox's event loop thread, where dereferencing the
+            // swappable g_rdx would race with a reconnect and an unguarded command
+            // could throw and abort the daemon.
+            zrem_matching_keys(m_prefix + ":avatar:*", id);
+            zrem_matching_keys(m_prefix + ":guild:*", id);
         }
 
         virtual void get_guild_map(guild_map_t& map)
@@ -408,6 +393,33 @@ class RedisDatabase : public Database {
                 dlog << "command threw; marking redis down";
                 m_connected = false;
                 m_pending--;
+            }
+        }
+
+        // Resolve every key matching pattern and queue a ZREM of id from each.
+        // Runs entirely on the main thread (synchronous KEYS + guarded issue()).
+        void zrem_matching_keys(const std::string& pattern, doid_t id)
+        {
+            if (!ensure_connected())
+                return;
+
+            try
+            {
+                auto& c = g_rdx->commandSync<std::unordered_set<std::string>>({"KEYS", pattern});
+                if (c.ok())
+                {
+                    for (auto key : c.reply())
+                    {
+                        m_pending++;
+                        issue({"ZREM", key, std::to_string(id)});
+                    }
+                }
+                c.free();
+            }
+            catch (const std::exception& e)
+            {
+                dlog << "zrem_matching_keys threw, redis dropped";
+                m_connected = false;
             }
         }
 
